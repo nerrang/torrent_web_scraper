@@ -11,17 +11,31 @@ from markupsafe import Markup, escape
 from app import config
 from app.db import RESOLUTIONS
 
-LABEL = {"ok": "정상", "partial": "일부 실패", "error": "실패", "running": "실행 중", "done": "완료",
+LABEL = {"ok": "정상", "partial": "일부 실패", "error": "실패", "running": "실행 중", "stopped": "중지됨", "done": "완료",
          "domain_moved": "도메인 이전", "blocked": "차단", "site_down": "사이트 다운", "transient": "일시 장애",
          "cloudflare": "CF 인증 필요", "parser_broken": "파서 고장"}
 # ?msg= flash texts: (flash-<kind>, text); {n} is filled by the page (e.g. interval minutes).
 FLASH = {"started": ("info", "실행을 시작했습니다. 끝나면 결과가 여기에 나옵니다."),
          "already-running": ("info", "이미 실행 중입니다."),
-         "interval": ("ok", "주기를 {n}분으로 바꿨습니다."),
+         "run-stop-requested": ("info", "실행 중지를 요청했습니다. 현재 작업이 끝나면 멈춥니다."),
+         "run-not-running": ("info", "실행 중인 작업이 없습니다."),
+         "site-added": ("ok", "사이트를 추가했습니다. 확인 후 켜기를 눌러 크롤링 대상에 포함하세요."),
+         "site-deleted": ("ok", "사이트와 해당 진단 기록을 삭제했습니다."),
+         "mode-auto": ("ok", "자동 실행으로 변경했습니다. 설정한 주기마다 크롤링합니다."),
+         "mode-manual": ("ok", "수동 실행으로 변경했습니다. 지금 실행을 눌렀을 때만 크롤링합니다."),
+         "interval": ("ok", "자동 실행 주기를 변경했습니다."),
          "added": ("ok", "프로그램을 추가했습니다. 맨 아래, 가장 나중 순서에 들어갑니다."),
          "resolution": ("ok", "해상도를 바꿨습니다."),
          "model": ("ok", "진단 모델을 바꿨습니다."),
-         "applied": ("ok", "설정을 바꿨습니다. 다음 실행에서 확인됩니다.")}
+         "applied": ("ok", "설정을 바꿨습니다. 다음 실행에서 확인됩니다."),
+         "runs-cleared": ("ok", "최근 실행 목록을 비웠습니다. 실행 로그와 자동 실행 주기는 유지됩니다."),
+         "download-history-deleted": ("ok", "다운로드 이력을 DB에서 삭제했습니다."),
+         "downloads-restored": ("ok", "기존 다운로드 이력을 다시 표시합니다."),
+         "downloads-cleared": ("ok", "다운로드 목록을 비웠습니다. Transmission 항목과 파일은 그대로입니다."),
+         "magnet-added": ("ok", "마그넷을 일시 정지 상태로 추가했습니다. 대시보드에서 확인 후 재실행을 누르면 다운로드가 시작됩니다."),
+         "magnet-duplicate": ("info", "이미 Transmission에 있는 마그넷입니다. 다운로드 목록에서 상태를 확인하세요."),
+         "download-stopped": ("ok", "Transmission에서 다운로드를 중지했습니다."),
+         "download-started": ("ok", "Transmission에서 다운로드를 다시 시작했습니다.")}
 
 
 def _d(v) -> datetime | None:

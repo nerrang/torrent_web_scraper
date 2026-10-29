@@ -101,3 +101,20 @@ def test_domain_candidates():
         f"https://torrentsome{n}.com" for n in range(269, 274)]
     assert c.domain_candidates("https://torrenttt253.top") == [f"https://torrenttt{n}.top" for n in range(254, 259)]
     assert c.domain_candidates("https://example.com") == []
+
+
+def test_parse_board_rejects_cross_origin_post_links():
+    base = "https://example.com/v-4-16"
+    html = ('<a href="/v/123">same site</a>'
+            '<a href="https://evil.example/v/999">external</a>'
+            '<a href="http://example.com/v/888">downgraded</a>')
+    assert c.parse_board(html, base) == [("same site", "https://example.com/v/123")]
+
+
+def test_trusted_site_url_limits_redirects():
+    base = "https://torrentsome270.com"
+    assert c.trusted_site_url(base, base + "/v-4-16")
+    assert c.trusted_site_url(base, "https://torrentsome272.com/v-4-16")
+    assert not c.trusted_site_url(base, "https://evil.example/v-4-16")
+    assert not c.trusted_site_url(base, "http://torrentsome270.com/v-4-16")
+    assert not c.trusted_site_url(base, "https://torrentsome270.com:8443/v-4-16")

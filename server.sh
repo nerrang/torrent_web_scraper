@@ -30,14 +30,30 @@ case "${1-}" in
 esac
 env=$1
 data=data/$env
-dc() { docker compose -f "$file" "$@"; }
-# 실제로 열린 포트를 compose에 묻는다(.env의 *_PORT 반영).
-url() { echo "http://$(dc port scraper 8080)"; }
+image=torrent-web-scraper
+if [[ $env == dev ]]; then image=torrent-web-scraper:dev; fi
+if docker info >/dev/null 2>&1; then
+  docker_cmd=(docker)
+elif sudo -n docker info >/dev/null 2>&1; then
+  docker_cmd=(sudo -n docker)
+else
+  echo "Docker에 접근할 수 없습니다. docker 그룹 또는 비밀번호 없는 sudo docker 권한이 필요합니다." >&2
+  exit 1
+fi
+dc() { "${docker_cmd[@]}" compose -f "$file" "$@"; }
+build_image() { "${docker_cmd[@]}" build --network host -t "$image" .; }
+# Host networking has no published port; read the resolved uvicorn port instead.
+url() {
+  local port
+  port=$(dc config --format json | python3 -c 'import json, sys; cmd = json.load(sys.stdin)["services"]["scraper"]["command"]; print(cmd[cmd.index("--port") + 1])')
+  echo "http://127.0.0.1:$port"
+}
 
 case "${2-}" in
   up)
     mkdir -p "$data"
-    dc up -d --build
+    build_image
+    dc up -d --no-build
     echo "$env: $(url)"
     ;;
   down) dc down ;;
@@ -51,11 +67,16 @@ case "${2-}" in
     dc down
     rm -f "$data"/app.db "$data"/app.db-wal "$data"/app.db-shm
     mkdir -p "$data"
-    dc up -d --build
+    build_image
+    dc up -d --no-build
     echo "$env: $(url) (DB 초기화)"
     ;;
   logs) dc logs -f ;;
   ps) dc ps ;;
-  dry-run) mkdir -p "$data"; dc run --rm scraper python -m app.scheduler --dry-run ;;
+  dry-run)
+    mkdir -p "$data"
+    if ! "${docker_cmd[@]}" image inspect "$image" >/dev/null 2>&1; then build_image; fi
+    dc run --rm scraper python -m app.scheduler --dry-run
+    ;;
   *) usage >&2; exit 1 ;;
 esac

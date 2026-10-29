@@ -85,3 +85,30 @@ def test_transient_verdict_has_label():
     from app.views import LABEL
     assert set(doctor.SCHEMA["properties"]["verdict"]["enum"]) <= set(LABEL)
     assert LABEL["transient"] == "일시 장애"
+
+
+def test_doctor_marks_open_board_ok_without_claude(tmp_path, monkeypatch):
+    import asyncio
+    import json
+
+    from app import db
+    from app.browser import FetchResult
+
+    conn = db.connect(tmp_path / "app.db")
+    site = db.list_sites(conn)[0]
+    report_id = db.create_doctor_report(conn, site["id"], "sonnet")
+    html = (FIX / "torrentsome" / "board.html").read_text()
+
+    class FakeBrowser:
+        async def fetch(self, url, **kwargs):
+            return FetchResult(200, url, html, None)
+
+    async def fail_query(*args, **kwargs):
+        raise AssertionError("Claude should not run when the board is open")
+        yield
+
+    monkeypatch.setattr(doctor, "query", fail_query)
+    asyncio.run(doctor.run_doctor(conn, FakeBrowser(), report_id, site, "sonnet"))
+    report = db.get_doctor_report(conn, report_id)
+    assert report["status"] == "done" and report["verdict"] == "ok"
+    assert json.loads(report["report_json"])["summary"] == "게시판이 열리고 게시글 목록이 표시됩니다."

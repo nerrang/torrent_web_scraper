@@ -243,6 +243,20 @@ async def run_doctor(conn, browser, report_id: int, site: dict, model: str) -> N
         last = None
         try:
             emit(f"start: {site['name']} {site['url']} model={model}")
+            if site["boards"]:
+                board_url = site["url"].rstrip("/") + site["boards"][0]
+                result, attempts = await _fetch_spaced(browser, board_url)
+                posts = (crawler.parse_board(result.html, result.final_url)
+                         if result.ok and urlsplit(result.final_url).hostname == urlsplit(site["url"]).hostname
+                         else [])
+                emit(f"board {site['boards'][0]}: "
+                     + (f"status {result.status}, {len(posts)} posts" if result.ok else f"FAIL {_fail(result)}"))
+                if posts and crawler.trusted_site_url(site["url"], result.final_url):
+                    data = {"verdict": "ok", "summary": "게시판이 열리고 게시글 목록이 표시됩니다.",
+                            "evidence": [f"{board_url}: HTTP {result.status}, 게시글 {len(posts)}건", *attempts],
+                            "suggested_fix": {"url": None, "boards": None}}
+                    db.finish_doctor_report(conn, report_id, "done", "ok", json.dumps(data, ensure_ascii=False), 0.0)
+                    return
             opts = ClaudeAgentOptions(
                 model=model, max_turns=15, max_budget_usd=1.0, tools=[],
                 mcp_servers={"doctor": create_sdk_mcp_server("doctor", tools=build_tools(conn, browser, site))},

@@ -4,10 +4,10 @@
 {% block head %}<meta http-equiv="refresh" content="{{ 10 if running else 60 }}; url=/">{% endblock %}
 {% block content %}
 <div class="page-head">
-  <div><h1>대시보드</h1><p class="sub">{{ interval_min }}분마다 자동으로 확인합니다</p></div>
-  <div class="actions"><form method="post" action="/run-now"><button class="btn btn-primary"><span aria-hidden="true">▶</span> 지금 실행</button></form></div>
+  <div><h1>대시보드</h1><p class="sub">{{ "자동 실행" if run_mode == "auto" else "수동 실행" }} · 새 다운로드는 확인 후 시작</p></div>
+  <div class="actions">{% if can_stop %}<form method="post" action="/run-stop"><button class="btn btn-secondary"{% if stop_requested %} disabled{% endif %}>{{ "중지 요청됨" if stop_requested else "실행 중지" }}</button></form>{% else %}<form method="post" action="/run-now"><button class="btn btn-primary"><span aria-hidden="true">▶</span> 지금 실행</button></form>{% endif %}</div>
 </div>
-{{ flash(msg=msg, n=interval_min) }}
+{{ flash(msg=msg) }}
 
 {% set last = runs[0] if runs else none %}
 {% if running %}{% set tone, title = "is-run", "실행 중" %}
@@ -15,7 +15,7 @@
 {% elif "interrupted by restart" in last.log %}{% set tone, title = "is-info", "서버 재시작으로 중단됨" %}
 {% elif last.status == "error" %}{% set tone, title = "is-bad", "실패" %}
 {% elif last.status == "partial" %}{% set tone, title = "is-warn", "일부 실패" %}
-{% elif stale_sites %}{% set tone, title = "is-warn", "정상 · 사이트 " ~ stale_sites|length ~ "곳 응답 없음" %}
+{% elif last.status == "stopped" %}{% set tone, title = "is-info", "중지됨" %}
 {% else %}{% set tone, title = "is-ok", "정상" %}{% endif %}
 <section class="card hero {{ tone }}" aria-label="크롤링 상태">
   <div class="hero-main">
@@ -29,39 +29,48 @@
       {% else %}<p class="hero-meta">지금 실행을 누르면 바로 확인합니다.</p>{% endif %}
     </div>
     <div class="hero-side">
-      <p class="label">다음 실행</p>
-      <p class="value">{% if running %}실행 중{% elif due %}곧 실행{% else %}{{ next_run_at|dt }} · {{ next_run_at|ago }}{% endif %}</p>
+      <p class="label">실행 방식</p>
+      <p class="value">{{ "자동" if run_mode == "auto" else "수동" }}</p>
+      {% if run_mode == "auto" %}<p class="hero-meta">다음 실행 {{ next_run_at|dt if next_run_at else "계산 중" }}</p>{% endif %}
     </div>
   </div>
-  <form class="form-row keep hero-foot" method="post" action="/settings/interval">
-    <label class="label-inline" for="interval">주기</label>
+  <form class="form-row keep hero-foot" method="post" action="/settings/run-mode">
+    <label class="label-inline" for="run-mode">실행 방식</label>
+    <select class="select" id="run-mode" name="mode">
+      <option value="manual"{{ " selected" if run_mode == "manual" }}>수동</option>
+      <option value="auto"{{ " selected" if run_mode == "auto" }}>자동</option>
+    </select>
+    <button class="btn btn-secondary">저장</button>
+  </form>
+  {% if run_mode == "auto" %}<form class="form-row keep hero-foot" method="post" action="/settings/interval">
+    <label class="label-inline" for="interval">자동 실행 주기</label>
     <input class="input" id="interval" type="number" name="minutes" min="5" max="1440" required value="{{ interval_min }}">
     <span class="unit">분</span>
     <button class="btn btn-secondary">저장</button>
-  </form>
+  </form>{% endif %}
 </section>
 
 {% set done = runs|rejectattr("status", "eq", "running")|list %}
 {% set n_runs = done|length %}{% set n_ok = done|selectattr("status", "eq", "ok")|list|length %}
-{% set n_day = downloads|selectattr("added_at", "ge", day_ago)|list|length %}
-{% set n_sites = sites|length %}{% set n_sites_ok = n_sites - stale_sites|length %}
+{% set n_day = day_added %}
+{% set n_sites = sites|length %}
 <dl class="stats">
   <div class="stat"><dt>24시간 추가</dt>
-    <dd class="value">{{ "20+" if n_day >= 20 else n_day }}</dd>
-    <dd class="hint">{{ "dev는 기록하지 않음" if APP_ENV == "dev" else "최근 20건 기준" }}</dd></div>
+    <dd class="value">{{ n_day }}</dd>
+    <dd class="hint">{{ "dev는 기록하지 않음" if APP_ENV == "dev" else "전체 기록 기준" }}</dd></div>
   <div class="stat {{ 'is-bad' if n_runs and not n_ok else 'is-warn' if n_ok < 0.8 * n_runs }}"><dt>최근 실행</dt>
     {% if n_runs %}<dd class="value">{{ n_ok }}/{{ n_runs }}<small>정상</small></dd><dd class="hint">최근 {{ n_runs }}회</dd>
     {% else %}<dd class="value">-</dd><dd class="hint">기록 없음</dd>{% endif %}</div>
-  <div class="stat {{ 'is-bad' if n_sites and not n_sites_ok else 'is-warn' if stale_sites }}"><dt><a href="/sites">사이트</a></dt>
+  <div class="stat"><dt><a href="/sites">사이트</a></dt>
     {% if APP_ENV == "dev" %}<dd class="value">{{ n_sites }}<small>곳 켜짐</small></dd><dd class="hint">dev는 집계하지 않음</dd>
-    {% else %}<dd class="value">{{ n_sites_ok }}/{{ n_sites }}<small>정상</small></dd><dd class="hint">켜진 사이트</dd>{% endif %}</div>
+    {% else %}<dd class="value">{{ n_sites }}<small>곳 켜짐</small></dd><dd class="hint">켜진 사이트</dd>{% endif %}</div>
   <div class="stat"><dt><a href="/programs">프로그램</a></dt>
     <dd class="value">{{ programs|selectattr("enabled")|list|length }}<small>켜짐</small></dd>
     <dd class="hint">전체 {{ programs|length }}</dd></div>
 </dl>
 
 <section class="card section">
-  <header class="card-head"><h2>최근 실행</h2></header>
+  <header class="card-head"><h2>최근 실행</h2>{% if runs %}<form method="post" action="/runs/clear-list" onsubmit="return confirm('최근 실행 목록을 초기화할까요? 실행 로그는 보존됩니다.')"><button class="btn btn-secondary">초기화</button></form>{% endif %}</header>
   {% if runs %}<div class="table-wrap"><table class="table">
     <thead><tr><th class="num">#</th><th>시작</th><th class="hide-sm">소요</th><th>상태</th><th class="num hide-sm">매칭</th><th class="num">추가</th></tr></thead>
     <tbody>{% for r in runs %}
@@ -70,20 +79,38 @@
       <td class="num hide-sm">{{ r.matched }}</td><td class="num{{ ' pos' if r.added }}">{{ r.added }}</td></tr>
     {% endfor %}</tbody>
   </table></div>
-  {% else %}<div class="empty"><p class="empty-title">아직 실행 기록이 없습니다</p><p class="muted">지금 실행을 누르거나 다음 실행을 기다리세요.</p></div>{% endif %}
+  {% else %}<div class="empty"><p class="empty-title">아직 실행 기록이 없습니다</p><p class="muted">지금 실행을 눌러 수집을 시작하세요.</p></div>{% endif %}
 </section>
 
 <section class="card">
-  <header class="card-head"><h2>다운로드</h2></header>
+  <header class="card-head"><h2>다운로드</h2>{% if transmission_web_url %}<a href="{{ transmission_web_url }}" target="_blank" rel="noopener noreferrer">Transmission 열기 ↗</a>{% endif %}</header>
+  {% if current_downloads is none %}<div class="empty"><p class="empty-title">Transmission 상태를 확인할 수 없습니다</p></div>
+  {% elif current_downloads %}<div class="table-wrap"><table class="table">
+    <thead><tr><th>추가 시각</th><th>이름</th><th>상태</th><th><span class="sr-only">작업</span></th></tr></thead>
+    <tbody>{% for t in current_downloads %}
+    <tr><td>{{ t.added_at|dt }}</td><td class="truncate" title="{{ t.title }}">{{ t.title }}</td>
+      {% set status_label = "중지됨" if t.status == 0 else "검사 중" if t.status in (1, 2) else "다운로드 대기" if t.status == 3 else "다운로드 중" if t.status == 4 else "배포 대기" if t.status == 5 else "배포 중" if t.status == 6 else "상태 확인 중" %}
+      <td>{% if transmission_web_url %}<a href="{{ transmission_web_url }}" target="_blank" rel="noopener noreferrer" title="Transmission 웹 화면 열기">{{ status_label }}{% if t.status == 4 %} · {{ t.progress }}%{% endif %} ↗</a>{% else %}{{ status_label }}{% endif %}</td>
+      <td>{% if t.status == 0 %}<form method="post" action="/downloads/{{ t.info_hash }}/start"><button class="btn btn-secondary">재실행</button></form>{% else %}<form method="post" action="/downloads/{{ t.info_hash }}/stop"><button class="btn btn-secondary">중지</button></form>{% endif %}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+  {% else %}<div class="empty"><p class="empty-title">Transmission에 다운로드가 없습니다</p></div>{% endif %}
+</section>
+
+<section class="card section">
+  <header class="card-head"><h2>다운로드 이력</h2><div class="actions">{% if hidden_download_count %}<form method="post" action="/downloads/show-list"><button class="btn btn-secondary">숨긴 이력 표시 ({{ hidden_download_count }})</button></form>{% endif %}{% if downloads %}<form method="post" action="/downloads/clear-list" onsubmit="return confirm('다운로드 이력 목록을 비울까요? Transmission 항목과 파일은 삭제되지 않습니다.')"><button class="btn btn-secondary">이력 비우기</button></form>{% endif %}</div></header>
   {% if downloads %}<div class="table-wrap"><table class="table">
-    <thead><tr><th>추가 시각</th><th>프로그램</th><th>회차</th><th class="hide-sm">제목</th><th class="hide-sm">사이트</th></tr></thead>
+    <thead><tr><th>추가 시각</th><th>프로그램</th><th>회차</th><th class="hide-sm">제목</th><th class="hide-sm">사이트</th><th>상태</th><th><span class="sr-only">작업</span></th></tr></thead>
     <tbody>{% for d in downloads %}
     <tr><td>{{ d.added_at|dt }}</td>
       <td>{{ d.program_name or "-" }}<span class="show-sm sub truncate" title="{{ d.title }}">{{ d.title }}</span></td>
-      <td>{{ d.episode or "-" }}</td><td class="truncate hide-sm" title="{{ d.title }}">{{ d.title }}</td><td class="hide-sm">{{ d.site }}</td></tr>
+      <td>{{ d.episode or "-" }}</td><td class="truncate hide-sm" title="{{ d.title }}">{{ d.title }}</td><td class="hide-sm">{{ d.site }}</td>
+      {% set status = torrent_status.get(d.info_hash|lower) if torrent_status is not none else none %}
+      {% set status_label = "중지됨" if status == 0 else "Transmission에 있음" if status is not none else "확인 불가" if torrent_status is none else "Transmission에 없음" %}
+      <td>{% if transmission_web_url %}<a href="{{ transmission_web_url }}" target="_blank" rel="noopener noreferrer" title="Transmission 웹 화면 열기">{{ status_label }} ↗</a>{% else %}{{ status_label }}{% endif %}</td>
+      <td>{% if torrent_status is not none and status is none %}<form method="post" action="/downloads/{{ d.info_hash }}/delete-history" onsubmit="return confirm('이 다운로드 이력을 DB에서 삭제할까요? 같은 회차가 자동으로 다시 추가될 수 있습니다. Transmission 항목과 파일은 삭제되지 않습니다.')"><button class="btn btn-danger btn-sm" aria-label="{{ d.title }} 이력 삭제">DB 삭제</button></form>{% endif %}</td></tr>
     {% endfor %}</tbody>
   </table></div>
-  {% else %}<div class="empty"><p class="empty-title">아직 받은 회차가 없습니다</p>
-    <p class="muted">{{ "dev는 다운로드를 기록하지 않습니다." if APP_ENV == "dev" else "새 회차가 올라오면 여기에 나옵니다." }}</p></div>{% endif %}
+  {% else %}<div class="empty"><p class="empty-title">표시할 다운로드 이력이 없습니다</p></div>{% endif %}
 </section>
 {% endblock %}

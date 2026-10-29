@@ -2,15 +2,15 @@
 name: torrent_web_scraper
 services:
   scraper:
-    build: .
     image: torrent-web-scraper
-    ports:
-      - "127.0.0.1:${PROD_PORT:-8080}:8080"
+    network_mode: host
+    dns: 8.8.8.8
     volumes:
       - ./data/prod:/data
     env_file: .env
     environment:
       APP_ENV: prod
+    command: ["uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "${PROD_PORT:-8080}"]
     init: true
     shm_size: 1gb
     restart: unless-stopped

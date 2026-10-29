@@ -236,7 +236,7 @@ form.inline { display: inline; margin: 0; }
 .badge.bad, .badge.error, .badge.blocked, .badge.site_down, .badge.cloudflare, .badge.parser_broken {
   background: var(--bad-bg); color: var(--bad);
 }
-.badge.running { background: var(--info-bg); color: var(--info); }
+.badge.running, .badge.stopped { background: var(--info-bg); color: var(--info); }
 .badge.running > i { animation: blink 1.5s ease-in-out infinite; }
 .badge.env { background: var(--env-bg); color: var(--env); }
 @keyframes blink { 50% { opacity: .25; } }
@@ -352,8 +352,9 @@ fieldset.field > legend { padding: 0; margin-bottom: 6px; color: var(--text-2); 
 .site-ctrl { display: flex; align-items: center; gap: var(--s-4); }
 .site-facts dt { color: var(--text-3); font-size: var(--fs-xs); line-height: 16px; margin-bottom: var(--s-1); }
 .site-facts dd { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; min-height: 22px; }
-.site-foot { padding: var(--s-3) var(--pad-card); }
-.site-foot .editor > summary { margin-left: -14px; } /* text edge lines up with card content (= .btn padding) */
+.site-foot { display: flex; align-items: flex-start; flex-wrap: wrap; gap: var(--s-2); padding: var(--s-3) var(--pad-card); }
+.site-foot .editor[open] { flex-basis: 100%; }
+.site-foot > form { margin-left: auto; }
 .site .editor-body { margin: var(--s-3) calc(-1 * var(--pad-card)) calc(-1 * var(--s-3)); box-shadow: none; }
 
 /* doctor report */

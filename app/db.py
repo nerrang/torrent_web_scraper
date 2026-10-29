@@ -23,11 +23,13 @@ CREATE TABLE IF NOT EXISTS runs(
   id INTEGER PRIMARY KEY, started TEXT NOT NULL, finished TEXT,
   status TEXT NOT NULL DEFAULT 'running',
   matched INTEGER NOT NULL DEFAULT 0, added INTEGER NOT NULL DEFAULT 0, log TEXT NOT NULL DEFAULT '');
+CREATE TABLE IF NOT EXISTS run_list_hidden(id INTEGER PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS downloads(
   info_hash TEXT PRIMARY KEY,
   program_id INTEGER REFERENCES programs(id) ON DELETE SET NULL,
   episode TEXT, title TEXT NOT NULL, site TEXT NOT NULL, added_at TEXT NOT NULL,
   UNIQUE(program_id, episode));
+CREATE TABLE IF NOT EXISTS download_list_hidden(info_hash TEXT PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS doctor_reports(
   id INTEGER PRIMARY KEY, site_id INTEGER NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
   started TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'running',
@@ -39,11 +41,11 @@ CREATE INDEX IF NOT EXISTS doctor_reports_site ON doctor_reports(site_id, id);
 
 A, B = ["/v-4-16", "/v-2-13", "/v-4-17"], ["/c/4/16", "/c/2/13", "/c/4/17"]
 SEED_SITES = [
-    ("토렌트썸", "https://torrentsome268.com", A, 1),
-    ("토렌트좋다", "https://torrentzota206.com", ["/t/4/16.html", "/t/2/13.html", "/t/4/17.html"], 1),
-    ("토렌트티티", "https://torrenttt253.top", B, 1),
-    ("토렌트알지", "https://torrentrj274.com", A, 0),
-    ("토렌트밤", "https://torrentbam252.top", B, 0),
+    ("토렌트썸", "https://torrentsome270.com", A, 1),
+    ("토렌트좋다", "https://torrentzota208.com", ["/t/4/16.html", "/t/2/13.html", "/t/4/17.html"], 1),
+    ("토렌트티티", "https://torrenttt255.top", B, 1),
+    ("토렌트알지", "https://torrentrj276.com", A, 0),
+    ("토렌트밤", "https://torrentbam254.top", B, 0),
 ]
 SEED_PROGRAMS = [
     ("라디오스타", "any", 1), ("돌싱포맨", "any", 0), ("PD 수첩", "720p", 0), ("나 혼자 산다", "any", 0),
@@ -52,7 +54,7 @@ SEED_PROGRAMS = [
     ("유 퀴즈", "any", 0), ("알쓸인잡", "any", 0), ("지구오락실", "any", 0), ("태어난", "any", 0),
     ("애프터시그널", "any", 0), ("사랑은 계속된다", "any", 0),
 ]
-SEED_SETTINGS = [("interval_min", "60"), ("doctor_model", "sonnet")]
+SEED_SETTINGS = [("interval_min", "60"), ("run_mode", "manual"), ("doctor_model", "sonnet")]
 RESOLUTIONS = ("720p", "1080p")  # resolution column: comma-joined subset in this order, or 'any'
 MODELS = ("sonnet", "opus")
 URL_RE = re.compile(r"^https?://[A-Za-z0-9.-]+(?::\d+)?$")
@@ -76,9 +78,11 @@ def connect(path: str | Path) -> sqlite3.Connection:
     conn.executemany("INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)", SEED_SETTINGS)
     if not conn.execute("SELECT 1 FROM programs LIMIT 1").fetchone():
         conn.executemany("INSERT INTO programs(name, resolution, enabled) VALUES (?, ?, ?)", SEED_PROGRAMS)
-    if not conn.execute("SELECT 1 FROM sites LIMIT 1").fetchone():
-        conn.executemany("INSERT INTO sites(name, url, boards, enabled) VALUES (?, ?, ?, ?)",
-                         [(n, u, json.dumps(b), e) for n, u, b, e in SEED_SITES])
+    if get_setting(conn, "sites_seeded") != "1":
+        if not conn.execute("SELECT 1 FROM sites LIMIT 1").fetchone():
+            conn.executemany("INSERT INTO sites(name, url, boards, enabled) VALUES (?, ?, ?, ?)",
+                             [(n, u, json.dumps(b), e) for n, u, b, e in SEED_SITES])
+        set_setting(conn, "sites_seeded", "1")
     # Anything still 'running' was cut off by a restart.
     conn.execute("UPDATE runs SET status='error', finished=?, log=log || char(10) || 'interrupted by restart' "
                  "WHERE status='running'", (now(),))
@@ -165,6 +169,24 @@ def get_site(conn, id: int) -> dict | None:
     return _site(_one(conn, "SELECT * FROM sites WHERE id=?", id))
 
 
+def add_site(conn, name: str, url: str, boards: list[str], pages: int = 3) -> int:
+    name = " ".join(name.split())
+    if not name or len(name) > 100:
+        raise ValueError("사이트 이름을 1~100자로 입력하세요")
+    url, boards = clean_site_fields(url, boards)
+    if not 1 <= pages <= 10:
+        raise ValueError("읽을 페이지 수는 1~10입니다")
+    try:
+        return conn.execute("INSERT INTO sites(name, url, boards, pages, enabled) VALUES (?, ?, ?, ?, 0)",
+                            (name, url, json.dumps(boards), pages)).lastrowid
+    except sqlite3.IntegrityError:
+        raise ValueError(f"이미 있는 사이트 이름입니다: {name}") from None
+
+
+def delete_site(conn, id: int) -> bool:
+    return conn.execute("DELETE FROM sites WHERE id=?", (id,)).rowcount > 0
+
+
 def update_site(conn, id: int, *, url: str | None = None, boards: list[str] | None = None,
                 pages: int | None = None, enabled: bool | None = None, last_ok_at: str | None = None) -> None:
     fields = {"url": url, "boards": None if boards is None else json.dumps(boards),
@@ -210,7 +232,18 @@ def finish_run(conn, id: int, status: str, matched: int, added: int, log: str) -
 
 
 def list_runs(conn, limit: int = 20) -> list[dict]:
-    return _all(conn, "SELECT * FROM runs ORDER BY id DESC LIMIT ?", limit)
+    return _all(conn, "SELECT * FROM runs WHERE NOT EXISTS "
+                      "(SELECT 1 FROM run_list_hidden h WHERE h.id = runs.id) ORDER BY id DESC LIMIT ?", limit)
+
+
+def latest_run(conn) -> dict | None:
+    """Scheduler anchor, including entries hidden from the dashboard."""
+    return _one(conn, "SELECT * FROM runs ORDER BY id DESC LIMIT 1")
+
+
+def hide_run_list(conn) -> None:
+    """Hide completed runs; keep an active run visible and the schedule intact."""
+    conn.execute("INSERT OR IGNORE INTO run_list_hidden(id) SELECT id FROM runs WHERE status != 'running'")
 
 
 def get_run(conn, id: int) -> dict | None:
@@ -227,7 +260,7 @@ def episode_exists(conn, program_id: int, episode: str) -> bool:
                         (program_id, episode)).fetchone() is not None
 
 
-def add_download(conn, info_hash: str, program_id: int, episode: str | None, title: str, site: str) -> bool:
+def add_download(conn, info_hash: str, program_id: int | None, episode: str | None, title: str, site: str) -> bool:
     try:
         conn.execute("INSERT INTO downloads(info_hash, program_id, episode, title, site, added_at) "
                      "VALUES (?, ?, ?, ?, ?, ?)", (info_hash, program_id, episode, title, site, now()))
@@ -236,9 +269,40 @@ def add_download(conn, info_hash: str, program_id: int, episode: str | None, tit
         return False
 
 
+def delete_download(conn, info_hash: str) -> bool:
+    """Delete only the app's history and deduplication record for a hash."""
+    conn.execute("DELETE FROM download_list_hidden WHERE info_hash=?", (info_hash,))
+    return conn.execute("DELETE FROM downloads WHERE info_hash=?", (info_hash,)).rowcount > 0
+
+
 def list_downloads(conn, limit: int = 50) -> list[dict]:
     return _all(conn, "SELECT d.*, p.name AS program_name FROM downloads d "
-                      "LEFT JOIN programs p ON p.id = d.program_id ORDER BY d.added_at DESC LIMIT ?", limit)
+                      "LEFT JOIN programs p ON p.id = d.program_id "
+                      "WHERE NOT EXISTS (SELECT 1 FROM download_list_hidden h WHERE h.info_hash = d.info_hash) "
+                      "ORDER BY d.added_at DESC LIMIT ?", limit)
+
+
+def show_download(conn, info_hash: str) -> None:
+    conn.execute("DELETE FROM download_list_hidden WHERE info_hash=?", (info_hash,))
+
+
+def hidden_download_count(conn) -> int:
+    return conn.execute("SELECT COUNT(*) FROM download_list_hidden h "
+                        "JOIN downloads d ON d.info_hash = h.info_hash").fetchone()[0]
+
+
+def show_download_list(conn) -> None:
+    """Restore previously hidden rows to the dashboard without changing deduplication."""
+    conn.execute("DELETE FROM download_list_hidden")
+
+
+def hide_download_list(conn) -> None:
+    """Clear the dashboard list while preserving hashes and episodes for deduplication."""
+    conn.execute("INSERT OR IGNORE INTO download_list_hidden(info_hash) SELECT info_hash FROM downloads")
+
+
+def count_downloads_since(conn, since: str) -> int:
+    return conn.execute("SELECT COUNT(*) FROM downloads WHERE added_at >= ?", (since,)).fetchone()[0]
 
 
 # doctor reports

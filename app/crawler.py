@@ -2,7 +2,7 @@
 import re
 from collections.abc import Iterable, Mapping
 from html.parser import HTMLParser
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 POST_RE = re.compile(r'/(?:v/\d+|torrent/[a-z0-9]+\.html|t/(?!\d+\.html)[A-Za-z0-9]+\.html)$')
 EP_RE = re.compile(r'(?<![A-Za-z0-9])E(\d{1,4})(?:\.(\d{6}))?(?!\d)')
@@ -51,9 +51,12 @@ def _links(html: str) -> list[tuple[str, str, str]]:
 def parse_board(html: str, base_url: str) -> list[tuple[str, str]]:
     """(title, absolute post url) in page order, deduped by url (first wins). Sidebar links included."""
     out: dict[str, str] = {}
+    base = urlsplit(base_url)
     for href, title, text in _links(html):
         url = urljoin(base_url, href)
-        if url in out or not POST_RE.search(url):
+        target = urlsplit(url)
+        if (target.scheme != base.scheme or target.netloc != base.netloc or target.username
+                or target.password or url in out or not POST_RE.search(target.path)):
             continue
         title = title.strip() or " ".join(text.split())
         if title:
@@ -87,6 +90,17 @@ def extract_magnets(html: str) -> list[str]:
 
 def magnet_uri(info_hash: str) -> str:
     return f"magnet:?xt=urn:btih:{info_hash}"
+
+
+def trusted_site_url(configured_url: str, final_url: str) -> bool:
+    """Accept only the configured HTTPS site or its bounded numbered successors."""
+    try:
+        target = urlsplit(final_url)
+        allowed = {urlsplit(u).hostname for u in [configured_url, *domain_candidates(configured_url)]}
+        return (target.scheme == "https" and target.hostname in allowed and target.port in (None, 443)
+                and not target.username and not target.password)
+    except ValueError:
+        return False
 
 
 def domain_candidates(url: str, n: int = 5) -> list[str]:

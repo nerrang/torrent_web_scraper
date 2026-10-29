@@ -1,5 +1,4 @@
 import asyncio
-from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -113,24 +112,62 @@ def test_failed_later_board_is_partial(tmp_path):
     assert db.get_site(conn, 1)["last_ok_at"]
 
 
-def test_interval_min_5(tmp_path):
+def test_scheduler_waits_for_manual_trigger(tmp_path, monkeypatch):
     conn = db.connect(tmp_path / "app.db")
-    s = Scheduler(conn, None)
-    with pytest.raises(ValueError):
-        s.set_interval(4)
-    s.set_interval(5)
-    assert db.get_setting(conn, "interval_min") == "5"
+    calls = []
 
-    db.set_setting(conn, "interval_min", "1")  # legacy value is read as 5
-    rid = db.create_run(conn)
+    async def fake_run_once(*args, **kwargs):
+        calls.append(1)
+
+    monkeypatch.setattr("app.scheduler.run_once", fake_run_once)
+    sched = Scheduler(conn, FakeBrowser())
 
     async def go():
-        s.start()
+        sched.start()
         await asyncio.sleep(0.05)
-        await s.stop()
+        assert calls == []
+        assert sched.trigger_now()
+        await asyncio.sleep(0.05)
+        assert calls == [1]
+        await sched.stop()
+
     asyncio.run(go())
-    started = datetime.fromisoformat(db.get_run(conn, rid)["started"])
-    assert s.next_run_at == started + timedelta(minutes=5)
+
+
+def test_mode_switch_persists_and_auto_runs_when_due(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta
+
+    path = tmp_path / "app.db"
+    conn = db.connect(path)
+    sched = Scheduler(conn, FakeBrowser())
+    assert sched.mode == "manual"
+    sched.set_mode("auto")
+    sched.set_interval(5)
+    assert db.get_setting(conn, "run_mode") == "auto"
+    db.set_setting(conn, "auto_enabled_at", (datetime.now() - timedelta(minutes=6)).isoformat(timespec="seconds"))
+    calls = []
+
+    async def fake_run_once(conn, *args, **kwargs):
+        calls.append(1)
+        rid = db.create_run(conn)
+        db.finish_run(conn, rid, "ok", 0, 0, "test")
+
+    monkeypatch.setattr("app.scheduler.run_once", fake_run_once)
+
+    async def go():
+        sched.start()
+        await asyncio.sleep(0.05)
+        assert calls == [1]
+        sched.set_mode("manual")
+        await asyncio.sleep(0.05)
+        assert sched.next_run_at is None
+        await sched.stop()
+
+    asyncio.run(go())
+    conn.close()
+    reopened = db.connect(path)
+    assert db.get_setting(reopened, "run_mode") == "manual"
+    reopened.close()
 
 
 def test_older_board_pages_are_crawled(tmp_path):
@@ -150,3 +187,34 @@ def test_older_board_pages_are_crawled(tmp_path):
     b = FakeBrowser()
     asyncio.run(run_once(conn, b, dry_run=True))
     assert not [u for u in b.urls if "?page=" in u]
+
+
+def test_user_stop_finishes_run_without_more_fetches(tmp_path):
+    conn = db.connect(tmp_path / "app.db")
+    db.update_site(conn, 1, boards=["/v-4-16"], pages=1)
+    for i in (2, 3):
+        db.update_site(conn, i, enabled=False)
+    stop = asyncio.Event()
+
+    class StoppingBrowser(FakeBrowser):
+        async def fetch(self, url, **kw):
+            result = await super().fetch(url, **kw)
+            stop.set()
+            return result
+
+    browser = StoppingBrowser()
+    rid = asyncio.run(run_once(conn, browser, add_magnet=lambda m: "added", stop_event=stop))
+    run = db.get_run(conn, rid)
+    assert run["status"] == "stopped" and "stopped by user" in run["log"]
+    assert len(browser.urls) == 1 and run["added"] == 0
+
+
+def test_scheduler_stop_request_requires_active_run(tmp_path):
+    conn = db.connect(tmp_path / "app.db")
+    sched = Scheduler(conn, FakeBrowser())
+    assert not sched.request_stop()
+
+    async def go():
+        async with sched._lock:
+            assert sched.request_stop() and sched.stop_requested
+    asyncio.run(go())

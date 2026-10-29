@@ -9,6 +9,17 @@
 {{ flash(error=error, msg=msg) }}
 
 <section class="card">
+  <header class="card-head"><h2>마그넷 직접 추가</h2></header>
+  <form class="card-body" method="post" action="/magnets">
+    <div class="form-row">
+      <label class="field grow"><span>마그넷 주소</span><input class="input" type="text" name="magnet" placeholder="magnet:?xt=urn:btih:..." autocomplete="off" required></label>
+      <button class="btn btn-primary">일시 정지 상태로 추가</button>
+    </div>
+    <p class="hint">프로그램 매칭과 관계없이 Transmission에 일시 정지 상태로 추가합니다. 대시보드에서 확인한 뒤 재실행을 누르면 다운로드가 시작됩니다.</p>
+  </form>
+</section>
+
+<section class="card section">
   <header class="card-head"><h2>새 프로그램</h2></header>
   <form class="card-body" method="post" action="/programs">
     <div class="form-row">
